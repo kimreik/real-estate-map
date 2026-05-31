@@ -170,7 +170,8 @@ export class MapView {
       const area = has(p.area) ? `${p.area} m²` : "—";
       const ppm2 = has(p.ppm2) ? `${fmt(Number(p.ppm2))} zł/m²` : "—";
       // Houses never carry a room count in RCN, so omit that slot for them.
-      const rooms = isHouse ? "" : `${has(p.izby) ? `${p.izby} izby` : "—"} · `;
+      const roomLabel = has(p.izby) ? `${p.izby} room${Number(p.izby) === 1 ? "" : "s"}` : "—";
+      const rooms = isHouse ? "" : `${roomLabel} · `;
       new maplibregl.Popup()
         .setLngLat(e.lngLat)
         .setHTML(
