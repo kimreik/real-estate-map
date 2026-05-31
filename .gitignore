@@ -1,0 +1,15 @@
+# dependencies / build
+node_modules/
+dist/
+.venv/
+
+# raw RCN source data (huge; not redistributable — regenerate locally)
+data/*.gml
+data/*.gpkg
+data/*.zip
+
+# generated frontend data is committed (public/data/*.json) so the site is self-contained
+
+# OS / editor
+.DS_Store
+*.log
