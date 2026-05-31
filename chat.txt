@@ -1,0 +1,70 @@
+What database is this? Or public site/API? I have some thoughts to build a map where I can see a number of apartments matching my criteria that were sold this year. Is it viable, or maybe there's already some app using this data and I can just check it?
+
+ https://www.donald.pl/artykuly/s4hAbRaN/ujawniono-jak-sciemnianie-o-cenach-mieszkan-pozwalalo-wiecej-na-nich-zarobic
+
+7:37 AM
+
+Identifying Polish real estate database and existing applications
+Identifying Polish real estate database and existing applications
+I'll fetch that article to see what data source it's referring to.
+
+
+Verifying API accessibility and cataloging existing applications
+Verifying API accessibility and cataloging existing applications
+The article points to a specific Polish government dataset. Let me verify the current state of it and the apps already using it.
+
+
+Synthesizing RCN database facts for user clarification
+Synthesizing RCN database facts for user clarification
+I have what I need. Let me do one quick check on the technical access (API vs. just a viewer) since that determines whether building your own is viable.
+
+
+Synthesized database details, existing solutions, and API accessibility options
+Synthesized database details, existing solutions, and API accessibility options
+That article is about Poland's Rejestr Cen Nieruchomości (RCN) — the official register of real transaction prices (from notarial deeds, not asking prices). It became free to access on 13 February 2026 via an amendment to Prawo geodezyjne i kartograficzne, and it contains location, property type, and sale price drawn from notarial acts, with no personal data of the parties. For flats you also get area, floor, and number of rooms.
+Rzeczpospolita
+Pewny Lokal
+
+The good news for building your map: the data is genuinely open, with machine-readable access. GUGiK exposes it via WMS/WFS at https://mapy.geoportal.gov.pl/wss/service/rcn, and you can download it in GeoParquet (national/voivodeship) and GeoPackage (voivodeship/county) formats. So pulling points, filtering by your criteria (size, rooms, transaction date = "sold this year"), and rendering them on a map is very viable — WFS + GeoParquet is exactly what you'd want.
+Geoportal.gov.pl
+
+But several apps already do most of this, so check them before coding:
+
+Geoportal Krajowy "Na Mapie" (geoportal-krajowy.pl) — official, whole country. Shows transaction and offer prices on an interactive hexagon/point map; click a point for area, total price, price per m², and transaction date.
+OnGeo.pl
+mapa.um.warszawa.pl/rcn-szukaj/ — Warsaw only, but offers filters by property type, street search, and dataset download (closest to "filter by my criteria").
+Murator.pl
+mojgeoportal.pl — a free aggregator built by Waldemar Izdebski, former Chief Surveyor of Poland, with parcel/transaction search.
+Murator.pl
+zametr.pl — the green/yellow-dot map from the article; it overlays RCN transaction prices onto current listings.
+One catch worth knowing: data coverage is per-powiat (county) — around 362 powiats are in the WFS service and ~352 viewable via WMS, often published with a delay because notarial acts take time to reach the county RCN databases. So "sold this year" will be incomplete for the most recent months.
+Geoportal.gov.pl
+Geoportal Krajowy
+
+My honest read: if you want Warsaw or another big city with custom filtering, the existing portals likely cover you. The gap a DIY build fills is cross-county, custom-criteria filtering on a single map with a strict "this year" date filter — the official viewer aggregates the last two years into hexagons rather than letting you slice freely. If that specific view matters to you, the GeoParquet download + a simple Leaflet/MapLibre front end is a weekend-scale project.
+
+Want me to sketch out what that build would look like technically?
+
+I haven't checked all of them, but the one I saw was limited - it showed only when you zoom in to a specific area and the filters were bad. What I'm interested in is a high level view of Warsaw. Let's say I set "4 room, 80+ meters, under 1.6 mil" and I want to see the heat map of districts. And if I zoom in to a district - to see where in the area it's concentrated
+
+7:47 AM
+
+Architected Warsaw heatmap prototype with district-level filtering and drill-down capability
+Architected Warsaw heatmap prototype with district-level filtering and drill-down capability
+For that exact view — a filtered choropleth of Warsaw's 18 districts that drills down to point concentration when you zoom — you're right that the official viewer falls short. Its hexagons aggregate everything and only appear at high zoom; there's no "show me only flats matching my filter, summarized per district" mode. That's precisely the gap a small custom build fills, and it's a small one.
+
+Here's the shape of it:
+
+Data prep (one-time script). Pull Warsaw's RCN transactions — either the WFS layer bounded to the city, or download the Mazowieckie GeoPackage and clip to Warsaw. Keep only lokale mieszkalne, and per record keep: point geometry, area, price, price/m², room count, transaction date, market type. Export to a compact JSON (~a few MB for a year or two of flat sales — small enough to filter entirely in the browser).
+
+Aggregation. Load Warsaw district boundaries (GeoJSON is on the city's open-data portal). For the high-level view, count how many records pass your filter (4 rooms, ≥80 m², <1.6M, date in current year) per district → color the choropleth by that count. That gives a "where does this kind of flat actually trade" supply map. Median price/m² of the matching set is a good alternate metric if you'd rather see value than volume.
+
+Drill-down. Below a zoom threshold, hide the choropleth and switch the matching points to a heatmap or clustered markers, so you see intra-district concentration.
+
+MapLibre GL handles all of this client-side; with the filters as sliders, re-aggregating per district on each change is instant at Warsaw's data volume. No backend needed.
+
+Two gotchas specific to your filter:
+
+Rooms. RCN/EGiB typically records liczba izb, which isn't always the same as listing "pokoje" (kitchens can count). Inspect the actual field before trusting a rooms == 4 filter — you may need area as the more reliable proxy.
+"This year." District data lands with a lag because notarial deeds trickle into the county database, so the current year will undercount recent months.
+I can build you a working MapLibre prototype with the three sliders and the choropleth→heatmap drill-down, wired so you drop in the real RCN export. Want it with real Warsaw district boundaries and placeholder transaction points (so the interaction is real and you just swap the data), or should I focus on the data-prep script that produces the JSON first?

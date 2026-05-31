@@ -24,6 +24,7 @@ import sys
 from collections import Counter
 from datetime import date
 from pathlib import Path
+from statistics import median
 
 from lxml import etree
 from pyproj import Transformer
@@ -58,6 +59,12 @@ MIN_FLAT_AREA = 10.0        # m^2; drops storage-share "flats"
 FLAT_PPM2_MIN = 3000        # zl/m^2; below this is almost never a real Warsaw sale
 FLAT_PPM2_MAX = 80000       # zl/m^2; above this is data error / bulk
 MIN_HOUSE_PRICE = 50000     # zl; drops token/share transfers
+MIN_HOUSE_AREA = 25.0       # m^2; require a recorded building area so every shown
+                            # record has area + zl/m^2 (RCN omits it for ~75% of houses)
+# Relative outlier gate: flats priced far below their own district's median zl/m^2 are
+# almost always under-declared prices or related-party deals mislabelled as market sales
+# (the absolute floor above can't catch them without harming genuinely cheap districts).
+ANOMALY_FRACTION = 0.50     # drop flats below this share of their district's median zl/m^2
 
 # XML namespaces
 RCN = "{urn:gugik:specyfikacje:gmlas:rejestrcennieruchomosci:1.0}"
@@ -307,7 +314,11 @@ def build_rows(lookups, districts, limit=None):
             if not price or price < MIN_HOUSE_PRICE:
                 stats["drop_sanity_price"] += 1
                 continue
-            rows.append(_row("house", coords, price, res_bldg["area"], None, None,
+            area = res_bldg["area"]
+            if not area or area < MIN_HOUSE_AREA:
+                stats["drop_house_no_area"] += 1
+                continue
+            rows.append(_row("house", coords, price, area, None, None,
                              d, market, districts))
             stats["house"] += 1
         else:
@@ -345,6 +356,24 @@ def _row(kind, coords, price, area, izby, floor, d, market, districts):
 
 
 FIELDS = ["lon", "lat", "price", "area", "ppm2", "izby", "floor", "date", "market", "kind", "district"]
+_LON, _PPM2, _KIND, _DISTRICT = 0, 4, 9, 10  # row indices used by the anomaly gate
+
+
+def drop_price_anomalies(rows, stats):
+    """Cull flats priced below ANOMALY_FRACTION of their district's median zl/m^2."""
+    by_district = {}
+    for r in rows:
+        if r[_KIND] == "flat" and r[_PPM2] is not None and r[_DISTRICT]:
+            by_district.setdefault(r[_DISTRICT], []).append(r[_PPM2])
+    floors = {d: ANOMALY_FRACTION * median(v) for d, v in by_district.items() if v}
+    kept = []
+    for r in rows:
+        floor = floors.get(r[_DISTRICT]) if r[_KIND] == "flat" and r[_PPM2] is not None else None
+        if floor is not None and r[_PPM2] < floor:
+            stats["drop_anomaly_below_district"] += 1
+            continue
+        kept.append(r)
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +399,8 @@ def main():
 
     print("pass 2: resolving transactions...", file=sys.stderr)
     rows, stats = build_rows(lookups, districts, limit=args.limit)
+
+    rows = drop_price_anomalies(rows, stats)
 
     # sanity: coordinates should land inside Warsaw's rough bbox
     bad = [r for r in rows[:5000] if not (20.7 <= r[0] <= 21.4 and 52.0 <= r[1] <= 52.5)]

@@ -29,8 +29,10 @@ html, body { margin: 0; height: 100%; }
 .field > label { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-bottom: 6px; }
 .row { display: flex; align-items: center; gap: 10px; }
 .row input[type="range"] { flex: 1; }
-.dual { display: flex; gap: 8px; flex: 1; }
-.dual input[type="range"] { flex: 1; }
+.stack { display: flex; flex-direction: column; gap: 6px; }
+.stack .val { text-align: right; min-width: 0; }
+.dual { display: flex; gap: 8px; flex: 1; min-width: 0; }
+.dual input[type="range"] { flex: 1; min-width: 0; }
 .dual input[type="date"] { flex: 1; min-width: 0; font-family: inherit; padding: 4px; }
 .val { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 92px; text-align: right; color: var(--ink); }
 .hint { font-size: 11px; color: var(--muted); margin: 6px 0 0; line-height: 1.4; }
@@ -52,6 +54,10 @@ html, body { margin: 0; height: 100%; }
 .foot a { color: var(--accent); }
 
 .maplibregl-popup-content { font-size: 13px; line-height: 1.5; }
+/* Hover tooltip follows the cursor; must not swallow mouse events. */
+.district-tip { pointer-events: none; }
+.district-tip .maplibregl-popup-content { padding: 8px 11px; }
+.district-tip .maplibregl-popup-tip { display: none; }
 
 @media (max-width: 720px) {
   #app { flex-direction: column; }

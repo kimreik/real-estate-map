@@ -1,10 +1,13 @@
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Metric, Tx } from "./types";
+import { metricValue, type DistrictStat } from "./aggregate";
 import { quantileScale, type Scale } from "./colors";
 
-// Zoom at which we switch from the district choropleth to individual points.
+// Zoom where the district choropleth gives way to the in-district drill-down
+// (heatmap of concentration, then individual points as you go deeper).
 const DRILL_ZOOM = 12.5;
+const POINT_ZOOM = 14; // individual clickable sales appear here
 const WARSAW: [number, number] = [21.01, 52.23];
 
 const CARTO_ATTRIB =
@@ -50,21 +53,15 @@ export class MapView {
   }
 
   private init() {
-    // --- District choropleth (name promoted to feature id for setFeatureState) ---
-    this.map.addSource("districts", {
-      type: "geojson",
-      data: this.districts,
-    });
+    // --- District choropleth: colour baked into feature props by setChoropleth() ---
+    this.map.addSource("districts", { type: "geojson", data: this.districts });
     this.map.addLayer({
       id: "district-fill",
       type: "fill",
       source: "districts",
       paint: {
-        // Colour is baked into each feature's properties by setChoropleth() and
-        // pushed via setData() — deterministic for 18 polygons, no feature-state timing.
         "fill-color": ["coalesce", ["get", "fillColor"], "rgba(0,0,0,0)"],
         "fill-opacity": [
-          // fade the choropleth out as we zoom into drill-down range
           "interpolate", ["linear"], ["zoom"],
           DRILL_ZOOM - 1, 0.72,
           DRILL_ZOOM, 0.0,
@@ -75,54 +72,50 @@ export class MapView {
       id: "district-border",
       type: "line",
       source: "districts",
-      paint: { "line-color": "#555", "line-width": 1 },
+      paint: {
+        "line-color": "#555",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 9, 0.6, 13, 1.4],
+      },
     });
 
-    // --- Points (clustered) for the drill-down ---
+    // --- Drill-down: a plain (non-clustered) point source feeding a heatmap + circles ---
     this.map.addSource("points", {
       type: "geojson",
       data: { type: "FeatureCollection", features: [] },
-      cluster: true,
-      clusterRadius: 55,
-      clusterMaxZoom: 16,
     });
     this.map.addLayer({
-      id: "clusters",
-      type: "circle",
+      id: "heat",
+      type: "heatmap",
       source: "points",
-      filter: ["has", "point_count"],
-      minzoom: DRILL_ZOOM,
+      minzoom: DRILL_ZOOM - 0.5,
       paint: {
-        "circle-color": "#3b6ea5",
-        "circle-opacity": 0.85,
-        "circle-radius": ["step", ["get", "point_count"], 14, 25, 20, 100, 28, 500, 36],
+        "heatmap-weight": 0.6,
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], DRILL_ZOOM, 1, 16, 3],
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], DRILL_ZOOM, 12, 16, 30],
+        "heatmap-color": [
+          "interpolate", ["linear"], ["heatmap-density"],
+          0, "rgba(255,255,178,0)",
+          0.2, "#fed976",
+          0.4, "#feb24c",
+          0.6, "#fd8d3c",
+          0.8, "#f03b20",
+          1, "#bd0026",
+        ],
+        // fade the heatmap out as individual points take over
+        "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], POINT_ZOOM, 0.85, POINT_ZOOM + 2, 0.15],
       },
-    });
-    this.map.addLayer({
-      id: "cluster-count",
-      type: "symbol",
-      source: "points",
-      filter: ["has", "point_count"],
-      minzoom: DRILL_ZOOM,
-      layout: {
-        "text-field": ["get", "point_count_abbreviated"],
-        "text-font": ["Noto Sans Regular"],
-        "text-size": 12,
-      },
-      paint: { "text-color": "#fff" },
     });
     this.map.addLayer({
       id: "point",
       type: "circle",
       source: "points",
-      filter: ["!", ["has", "point_count"]],
-      minzoom: DRILL_ZOOM,
+      minzoom: POINT_ZOOM,
       paint: {
         "circle-color": ["case", ["==", ["get", "kind"], "house"], "#2e7d32", "#c62828"],
-        "circle-radius": 5,
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], POINT_ZOOM, 3, 17, 7],
         "circle-stroke-width": 1,
         "circle-stroke-color": "#fff",
-        "circle-opacity": 0.85,
+        "circle-opacity": ["interpolate", ["linear"], ["zoom"], POINT_ZOOM, 0.2, POINT_ZOOM + 1.5, 0.9],
       },
     });
 
@@ -132,52 +125,88 @@ export class MapView {
   }
 
   private wireInteractions() {
-    // Click a cluster -> zoom into it.
-    this.map.on("click", "clusters", async (e) => {
-      const feat = this.map.queryRenderedFeatures(e.point, { layers: ["clusters"] })[0];
-      const id = feat.properties?.cluster_id;
-      const src = this.map.getSource("points") as maplibregl.GeoJSONSource;
-      const zoom = await src.getClusterExpansionZoom(id);
-      this.map.easeTo({ center: (feat.geometry as GeoJSON.Point).coordinates as [number, number], zoom });
+    // --- District hover tooltip (only while the choropleth is the active view) ---
+    // Reposition on every move (cheap), but only rebuild the HTML when the hovered
+    // district actually changes — rebuilding it every mousemove caused flicker.
+    const tip = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      className: "district-tip",
+      anchor: "bottom-left", // fixed anchor: no orientation flips as it follows the cursor
+      offset: 12,
+    });
+    const plnFmt = new Intl.NumberFormat("pl-PL");
+    let hovered: string | null = null;
+    this.map.on("mousemove", "district-fill", (e) => {
+      if (this.map.getZoom() >= DRILL_ZOOM) {
+        if (hovered) { tip.remove(); hovered = null; }
+        return;
+      }
+      const p = e.features?.[0]?.properties as { name?: string; count?: number; avgPpm2?: number | null } | undefined;
+      if (!p?.name) return;
+      this.map.getCanvas().style.cursor = "pointer";
+      tip.setLngLat(e.lngLat);
+      if (p.name !== hovered) {
+        hovered = p.name;
+        const avg = p.avgPpm2 != null && (p.avgPpm2 as unknown) !== "null"
+          ? `${plnFmt.format(Number(p.avgPpm2))} zł/m²`
+          : "—";
+        tip.setHTML(`<strong>${p.name}</strong><br>${plnFmt.format(Number(p.count ?? 0))} matches<br>avg ${avg}`);
+        if (!tip.isOpen()) tip.addTo(this.map);
+      }
+    });
+    this.map.on("mouseleave", "district-fill", () => {
+      this.map.getCanvas().style.cursor = "";
+      tip.remove();
+      hovered = null;
     });
 
-    // Single-point popup.
     this.map.on("click", "point", (e) => {
       const p = e.features?.[0]?.properties;
       if (!p) return;
       const fmt = (n: number) => new Intl.NumberFormat("pl-PL").format(n);
-      const rooms = p.izby != null && p.izby !== "" ? `${p.izby} izby` : "—";
-      const area = p.area && p.area !== "null" ? `${p.area} m²` : "—";
-      const ppm2 = p.ppm2 && p.ppm2 !== "null" ? `${fmt(Number(p.ppm2))} zł/m²` : "—";
+      const has = (v: unknown) => v !== null && v !== undefined && v !== "" && v !== "null";
+      const isHouse = p.kind === "house";
+      const area = has(p.area) ? `${p.area} m²` : "—";
+      const ppm2 = has(p.ppm2) ? `${fmt(Number(p.ppm2))} zł/m²` : "—";
+      // Houses never carry a room count in RCN, so omit that slot for them.
+      const rooms = isHouse ? "" : `${has(p.izby) ? `${p.izby} izby` : "—"} · `;
       new maplibregl.Popup()
         .setLngLat(e.lngLat)
         .setHTML(
-          `<strong>${p.kind === "house" ? "House" : "Flat"}</strong> · ${p.district ?? ""}<br>` +
-            `${fmt(Number(p.price))} zł · ${area} · ${ppm2}<br>` +
-            `${rooms} · sold ${p.date}`,
+          `<strong>${isHouse ? "House" : "Flat"}</strong> · ${p.district ?? ""}<br>` +
+            `${fmt(Number(p.price))} zł · ${area} · ${ppm2}<br>${rooms}sold ${p.date}`,
         )
         .addTo(this.map);
     });
-
-    for (const layer of ["clusters", "point"]) {
-      this.map.on("mouseenter", layer, () => (this.map.getCanvas().style.cursor = "pointer"));
-      this.map.on("mouseleave", layer, () => (this.map.getCanvas().style.cursor = ""));
-    }
+    this.map.on("mouseenter", "point", () => (this.map.getCanvas().style.cursor = "pointer"));
+    this.map.on("mouseleave", "point", () => (this.map.getCanvas().style.cursor = ""));
   }
 
-  /** Recolour districts for the given metric values. */
-  setChoropleth(valuesByDistrict: Map<string, number>, metric: Metric) {
+  /** Recolour districts for the chosen metric and stash per-district stats for the hover tooltip. */
+  setChoropleth(stats: Map<string, DistrictStat>, metric: Metric) {
     this.lastMetric = metric;
-    const scale = quantileScale([...valuesByDistrict.values()]);
+    const values: number[] = [];
+    for (const s of stats.values()) {
+      const v = metricValue(s, metric);
+      if (v !== undefined && Number.isFinite(v)) values.push(v);
+    }
+    const scale = quantileScale(values);
     this.lastScale = scale;
     for (const f of this.districts.features) {
-      const name = (f.properties as { name: string }).name;
-      const v = valuesByDistrict.get(name);
-      this.map.setFeatureState(
-        { source: "districts", id: name },
-        { color: v === undefined ? "rgba(0,0,0,0)" : scale.colorFor(v), value: v ?? null },
-      );
+      const props = f.properties as {
+        name: string;
+        fillColor?: string;
+        count?: number;
+        avgPpm2?: number | null;
+      };
+      const s = stats.get(props.name);
+      const v = s ? metricValue(s, metric) : undefined;
+      props.fillColor = v === undefined ? "rgba(0,0,0,0)" : scale.colorFor(v);
+      props.count = s?.count ?? 0;
+      props.avgPpm2 = s?.avgPpm2 ?? null;
     }
+    (this.map.getSource("districts") as maplibregl.GeoJSONSource | undefined)?.setData(this.districts);
   }
 
   /** Replace the drill-down point set. */

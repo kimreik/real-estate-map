@@ -1,7 +1,7 @@
 import "./style.css";
 import { loadDataset, loadDistricts } from "./data";
 import { buildControls } from "./controls";
-import { aggregateByDistrict, filterTxs } from "./aggregate";
+import { districtStats, filterTxs } from "./aggregate";
 import { MapView } from "./mapview";
 
 async function boot() {
@@ -22,8 +22,8 @@ async function boot() {
 
   function update() {
     const filtered = filterTxs(ds.txs, controls.state);
-    const byDistrict = aggregateByDistrict(filtered, controls.metric);
-    view.setChoropleth(byDistrict, controls.metric);
+    const stats = districtStats(filtered);
+    view.setChoropleth(stats, controls.metric);
     view.setPoints(filtered);
     controls.setResultCount(filtered.length);
     const scale = view.scale();

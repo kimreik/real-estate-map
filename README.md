@@ -1,5 +1,12 @@
 # Warsaw sold-prices map
 
+> 🤖 **Built end-to-end by [Claude Code](https://claude.com/claude-code) in ~2 hours** — as a
+> demonstration of what AI-assisted development can do. From a one-paragraph idea, Claude
+> researched the data source, reverse-engineered a 2.9 GB relational GML export, wrote the
+> Python data pipeline, built the MapLibre frontend, and debugged it live in a headless
+> browser — all in a single session. Every design decision was made by the human; every line
+> of code was written by the AI.
+
 A static, backend-free map of **real residential transaction prices** in Warsaw, drawn
 from Poland's *Rejestr Cen Nieruchomości* (RCN). Filter by price, area, rooms, market and
 date; the 18 districts recolour live by matching-sale count (or median zł/m²). Zoom into a
@@ -38,9 +45,11 @@ see below). To rebuild the JSON from a fresh download:
 
 What the script keeps (see the `Config` block to adjust): residential **flats**
 (`funkcjaLokalu = mieszkalna`) and **houses** (developed plots with a residential building),
-**free-market or untyped** deeds only, dated **2025-01-01 onward**, with a conservative
-sanity gate on implausible prices. Geometry is reprojected EPSG:2178 → WGS84 and each sale
-is tagged with its district.
+**free-market or untyped** deeds only, dated **2025-01-01 onward**. Two price-quality gates
+apply: an absolute sanity floor/ceiling, and a **relative gate** that drops flats priced below
+`ANOMALY_FRACTION` (50%) of their own district's median zł/m² — these are almost always
+under-declared or related-party prices the absolute floor can't catch. Geometry is reprojected
+EPSG:2178 → WGS84 and each sale is tagged with its district.
 
 ## Develop & build
 

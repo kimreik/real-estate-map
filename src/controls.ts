@@ -117,7 +117,7 @@ export function buildControls(
     onChange();
   };
   syncArea();
-  panel.append(field("Area", wrap(el("div", { className: "dual" }, [areaMin, areaMax]), areaVal)));
+  panel.append(field("Area", el("div", { className: "stack" }, [areaVal, el("div", { className: "dual" }, [areaMin, areaMax])])));
 
   // --- kind & market checkboxes ---
   panel.append(
