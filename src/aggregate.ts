@@ -28,13 +28,14 @@ export interface DistrictStat {
   medianPpm2: number | null; // median zł/m² (used for the choropleth metric)
 }
 
-/** Per-district stats computed over already-filtered rows. */
-export function districtStats(filtered: Tx[]): Map<string, DistrictStat> {
+/** Per-area stats computed over already-filtered rows, grouped by the given key. */
+export function areaStats(filtered: Tx[], key: (t: Tx) => string | null): Map<string, DistrictStat> {
   const buckets = new Map<string, Tx[]>();
   for (const t of filtered) {
-    if (!t.district) continue;
-    let arr = buckets.get(t.district);
-    if (!arr) buckets.set(t.district, (arr = []));
+    const k = key(t);
+    if (!k) continue;
+    let arr = buckets.get(k);
+    if (!arr) buckets.set(k, (arr = []));
     arr.push(t);
   }
   const out = new Map<string, DistrictStat>();

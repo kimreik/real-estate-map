@@ -9,8 +9,9 @@
 
 A static, backend-free map of **real residential transaction prices** in Warsaw, drawn
 from Poland's *Rejestr Cen Nieruchomości* (RCN). Filter by price, area, rooms, market and
-date; the 18 districts recolour live by matching-sale count (or median zł/m²). Zoom into a
-district to see a heatmap of concentration, then individual clickable sales.
+date; the map recolours live by matching-sale count (or median zł/m²) and grows more granular
+as you zoom: **18 districts → ~140 MSI neighbourhoods → heatmap of concentration → individual
+clickable sales.** Each tier has its own hover (name, match count, average zł/m²).
 
 Everything runs in the browser — deployable to GitHub Pages.
 
@@ -49,7 +50,12 @@ What the script keeps (see the `Config` block to adjust): residential **flats**
 apply: an absolute sanity floor/ceiling, and a **relative gate** that drops flats priced below
 `ANOMALY_FRACTION` (50%) of their own district's median zł/m² — these are almost always
 under-declared or related-party prices the absolute floor can't catch. Geometry is reprojected
-EPSG:2178 → WGS84 and each sale is tagged with its district.
+EPSG:2178 → WGS84 and each sale is tagged with both its **district** and its **MSI
+neighbourhood** (point-in-polygon).
+
+The neighbourhood boundaries (`data/warszawa-msi.geojson`, ~144 areas) were extracted once from
+OpenStreetMap — `admin_level=10` relations within Warsaw via Overpass, assembled to GeoJSON with
+`osm2geojson` and lightly simplified. The 18 districts come from `data/warszawa-dzielnice.geojson`.
 
 ## Develop & build
 

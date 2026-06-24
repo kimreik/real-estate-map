@@ -54,6 +54,10 @@ html, body { margin: 0; height: 100%; }
 .foot a { color: var(--accent); }
 
 .maplibregl-popup-content { font-size: 13px; line-height: 1.5; }
+.sale-head { margin-bottom: 4px; }
+.sales { max-height: 220px; overflow-y: auto; }
+.sale { white-space: nowrap; font-variant-numeric: tabular-nums; padding: 1px 0; }
+.sales .sale + .sale { border-top: 1px solid var(--line); }
 /* Hover tooltip follows the cursor; must not swallow mouse events. */
 .district-tip { pointer-events: none; }
 .district-tip .maplibregl-popup-content { padding: 8px 11px; }

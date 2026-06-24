@@ -11,6 +11,7 @@ export interface Tx {
   market: 1 | 2 | null; // 1 = primary (rynek pierwotny), 2 = secondary
   kind: "flat" | "house";
   district: string | null;
+  msi: string | null; // MSI neighborhood (e.g. "Błonia Wilanowskie")
 }
 
 export interface FilterState {

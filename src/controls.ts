@@ -18,7 +18,7 @@ export interface Controls {
   state: FilterState;
   metric: Metric;
   setResultCount(n: number): void;
-  setLegend(items: { color: string; from: number; to: number | null }[], metric: Metric): void;
+  setLegend(items: { color: string; from: number; to: number | null }[], metric: Metric, level: string): void;
 }
 
 export function buildControls(
@@ -185,10 +185,10 @@ export function buildControls(
     setResultCount(n: number) {
       count.textContent = `${pln.format(n)} matching sales`;
     },
-    setLegend(items, m) {
+    setLegend(items, m, level) {
       legend.innerHTML = "";
       const unit = (v: number) => (m === "count" ? pln.format(Math.round(v)) : `${pln.format(Math.round(v))} zł/m²`);
-      legend.append(el("div", { className: "legend-title", textContent: m === "count" ? "Sales per district" : "Median zł/m²" }));
+      legend.append(el("div", { className: "legend-title", textContent: m === "count" ? `Sales per ${level}` : "Median zł/m²" }));
       for (const it of items) {
         const label = it.to === null ? `${unit(it.from)}+` : `${unit(it.from)}–${unit(it.to)}`;
         const swatch = el("span", { className: "swatch" });

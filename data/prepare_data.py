@@ -29,6 +29,7 @@ from statistics import median
 from lxml import etree
 from pyproj import Transformer
 from shapely.geometry import Point, Polygon, mapping, shape
+from shapely.strtree import STRtree
 
 # ---------------------------------------------------------------------------
 # Config
@@ -36,8 +37,10 @@ from shapely.geometry import Point, Polygon, mapping, shape
 ROOT = Path(__file__).resolve().parent.parent
 RAW_GML = ROOT / "data" / "RCN_20260526.gml"
 DISTRICTS_SRC = ROOT / "data" / "warszawa-dzielnice.geojson"
+NEIGHBORHOODS_SRC = ROOT / "data" / "warszawa-msi.geojson"   # ~144 MSI areas (osiedla)
 OUT_TX = ROOT / "public" / "data" / "transactions.json"
 OUT_DISTRICTS = ROOT / "public" / "data" / "districts.geojson"
+OUT_NEIGHBORHOODS = ROOT / "public" / "data" / "neighborhoods.geojson"
 
 CUTOFF = "2025-01-01"          # keep deeds on/after this date (user requirement #1)
 SOURCE_EPSG = 2178             # PUWG 2000 zone 7, as declared in the GML srsName
@@ -211,37 +214,41 @@ def build_lookups(path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Districts: load 18 dzielnice, expose a point-in-polygon tagger
+# Areas (districts + neighborhoods): load polygons and expose a fast tagger
 # ---------------------------------------------------------------------------
-def load_districts(path: Path):
-    gj = json.loads(path.read_text())
-    feats = []
-    for f in gj["features"]:
-        name = f["properties"].get("name")
-        if name and name.lower() != "warszawa":   # drop the whole-city outline
-            feats.append((name, shape(f["geometry"])))
-    out_geojson = {
-        "type": "FeatureCollection",
-        "features": [
-            {"type": "Feature", "properties": {"name": n}, "geometry": mapping(g)}
-            for n, g in feats
-        ],
-    }
-    return feats, out_geojson
+class AreaTagger:
+    """Point-in-polygon lookup over a set of named areas, indexed with an R-tree."""
 
+    def __init__(self, path: Path):
+        gj = json.loads(path.read_text())
+        self.names, geoms = [], []
+        for f in gj["features"]:
+            name = f["properties"].get("name")
+            if name and name.lower() != "warszawa":   # drop any whole-city outline
+                self.names.append(name)
+                geoms.append(shape(f["geometry"]))
+        self.geoms = geoms
+        self.tree = STRtree(geoms)
+        self.geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {"name": n}, "geometry": mapping(g)}
+                for n, g in zip(self.names, geoms)
+            ],
+        }
 
-def tag_district(feats, lon, lat):
-    p = Point(lon, lat)
-    for name, geom in feats:
-        if geom.contains(p):
-            return name
-    return None
+    def tag(self, lon, lat):
+        p = Point(lon, lat)
+        for i in self.tree.query(p):            # bbox candidates (R-tree)
+            if self.geoms[int(i)].contains(p):  # then confirm point-in-polygon
+                return self.names[int(i)]
+        return None
 
 
 # ---------------------------------------------------------------------------
 # Pass 2: resolve transactions into slim rows
 # ---------------------------------------------------------------------------
-def build_rows(lookups, districts, limit=None):
+def build_rows(lookups, districts, neighborhoods, limit=None):
     docs, lokale, budynki, dzialki, nieruch, transakcje = lookups
     today = date.today().isoformat()
     rows = []
@@ -293,7 +300,7 @@ def build_rows(lookups, districts, limit=None):
                     stats["drop_sanity_ppm2"] += 1
                     continue
                 rows.append(_row("flat", coords, price, area, lok["izby"], lok["floor"],
-                                 d, market, districts))
+                                 d, market, districts, neighborhoods))
                 stats["flat"] += 1
                 made = True
             if not made:
@@ -319,7 +326,7 @@ def build_rows(lookups, districts, limit=None):
                 stats["drop_house_no_area"] += 1
                 continue
             rows.append(_row("house", coords, price, area, None, None,
-                             d, market, districts))
+                             d, market, districts, neighborhoods))
             stats["house"] += 1
         else:
             stats["drop_other_kind"] += 1
@@ -338,7 +345,7 @@ def _dzialka_coords(nr, dzialki):
     return None
 
 
-def _row(kind, coords, price, area, izby, floor, d, market, districts):
+def _row(kind, coords, price, area, izby, floor, d, market, districts, neighborhoods):
     lon, lat = coords
     ppm2 = round(price / area) if area and area > 0 else None
     return [
@@ -351,11 +358,12 @@ def _row(kind, coords, price, area, izby, floor, d, market, districts):
         d,
         market,
         kind,
-        tag_district(districts, lon, lat),
+        districts.tag(lon, lat),
+        neighborhoods.tag(lon, lat),
     ]
 
 
-FIELDS = ["lon", "lat", "price", "area", "ppm2", "izby", "floor", "date", "market", "kind", "district"]
+FIELDS = ["lon", "lat", "price", "area", "ppm2", "izby", "floor", "date", "market", "kind", "district", "msi"]
 _LON, _PPM2, _KIND, _DISTRICT = 0, 4, 9, 10  # row indices used by the anomaly gate
 
 
@@ -385,20 +393,20 @@ def main():
                     help="stop after N output rows (quick validation)")
     args = ap.parse_args()
 
-    if not RAW_GML.exists():
-        sys.exit(f"missing raw GML: {RAW_GML}")
-    if not DISTRICTS_SRC.exists():
-        sys.exit(f"missing districts source: {DISTRICTS_SRC}")
+    for src in (RAW_GML, DISTRICTS_SRC, NEIGHBORHOODS_SRC):
+        if not src.exists():
+            sys.exit(f"missing source: {src}")
 
-    print("loading districts...", file=sys.stderr)
-    districts, districts_geojson = load_districts(DISTRICTS_SRC)
-    print(f"  {len(districts)} districts", file=sys.stderr)
+    print("loading areas...", file=sys.stderr)
+    districts = AreaTagger(DISTRICTS_SRC)
+    neighborhoods = AreaTagger(NEIGHBORHOODS_SRC)
+    print(f"  {len(districts.names)} districts, {len(neighborhoods.names)} neighborhoods", file=sys.stderr)
 
     print("pass 1: streaming GML and building lookups (this takes a few minutes)...", file=sys.stderr)
     lookups = build_lookups(RAW_GML)
 
     print("pass 2: resolving transactions...", file=sys.stderr)
-    rows, stats = build_rows(lookups, districts, limit=args.limit)
+    rows, stats = build_rows(lookups, districts, neighborhoods, limit=args.limit)
 
     rows = drop_price_anomalies(rows, stats)
 
@@ -419,9 +427,11 @@ def main():
         "rows": rows,
     }
     OUT_TX.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-    OUT_DISTRICTS.write_text(json.dumps(districts_geojson, ensure_ascii=False))
+    OUT_DISTRICTS.write_text(json.dumps(districts.geojson, ensure_ascii=False))
+    OUT_NEIGHBORHOODS.write_text(json.dumps(neighborhoods.geojson, ensure_ascii=False))
     print(f"\nwrote {OUT_TX} ({OUT_TX.stat().st_size/1e6:.1f} MB)", file=sys.stderr)
     print(f"wrote {OUT_DISTRICTS} ({OUT_DISTRICTS.stat().st_size/1e6:.1f} MB)", file=sys.stderr)
+    print(f"wrote {OUT_NEIGHBORHOODS} ({OUT_NEIGHBORHOODS.stat().st_size/1e6:.1f} MB)", file=sys.stderr)
 
 
 if __name__ == "__main__":

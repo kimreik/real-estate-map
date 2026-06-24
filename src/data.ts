@@ -27,6 +27,7 @@ export async function loadDataset(): Promise<Dataset> {
     market: r[f.market] as 1 | 2 | null,
     kind: r[f.kind] as "flat" | "house",
     district: r[f.district] as string | null,
+    msi: r[f.msi] as string | null,
   }));
 
   // Slider ranges derived from the data, with a price cap so a handful of
@@ -49,8 +50,8 @@ export async function loadDataset(): Promise<Dataset> {
   };
 }
 
-export async function loadDistricts(): Promise<GeoJSON.FeatureCollection> {
-  const res = await fetch(`${base}data/districts.geojson`);
-  if (!res.ok) throw new Error(`failed to load districts.geojson: ${res.status}`);
+export async function loadAreas(file: string): Promise<GeoJSON.FeatureCollection> {
+  const res = await fetch(`${base}data/${file}`);
+  if (!res.ok) throw new Error(`failed to load ${file}: ${res.status}`);
   return (await res.json()) as GeoJSON.FeatureCollection;
 }
